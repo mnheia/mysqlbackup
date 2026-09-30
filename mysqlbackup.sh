@@ -97,7 +97,16 @@ backup_database() {
 
   rm -f "$tmp_file"
 
-  if mysqldump       --single-transaction       --quick       --routines       --events       --triggers       --hex-blob       --default-character-set=utf8mb4       --max-allowed-packet=1073741824       "$db" | gzip -c > "$tmp_file"; then
+  if mysqldump \
+      --single-transaction \
+      --quick \
+      --routines \
+      --events \
+      --triggers \
+      --hex-blob \
+      --default-character-set=utf8mb4 \
+      --max-allowed-packet=1073741824 \
+      "$db" | gzip -c > "$tmp_file"; then
     mv -f "$tmp_file" "$out_file"
   else
     rm -f "$tmp_file"
