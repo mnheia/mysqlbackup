@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+# Store MySQL/MariaDB credentials in /root/.my.cnf (chmod 600), for example:
+# [client]
+# user=backup
+# password=CHANGE_ME
+# host=localhost
+
+export EMAIL="root@localhost"
+export HOST="$(hostname -f)"
+export FROM="no-reply@${HOST}"
+
+export OPTIMIZE="0"
+export CHECK_CREATED="1"
+export CHECK_SIZE="10000"
+export AGE="+7"
+
+export DATE="$(date +%Y%m%d)"
+export TIME_FORMAT="+%Y-%m-%d_%H:%M:%S"
+
+export PREFIX="/var/backups/mysql"
+export PATERN="/usr/local/sbin/mysqlbackup_patern"
+export LOG="/var/log/mysqlbackup.log"
+
+export ERROR_LOG="$(mktemp)"
+export ERROR_LOG2="$(mktemp)"
