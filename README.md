@@ -1,4 +1,4 @@
-Copyright (c) 2026, Mnheia <mnheia@gmail.com>
+Copyright (c) 2026, mnheia
 
 # mysqlbackup
 Simple MySQL/MariaDB backup script with per-database compressed dumps, retention, size checks, locking, optional optimization and e-mail error reporting.
