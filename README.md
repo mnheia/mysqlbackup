@@ -19,12 +19,14 @@ host=localhost
 chmod 600 /root/.my.cnf
 ```
 
-The `mysql`, `mysqldump` and `mysqlcheck` clients automatically use that file.
+The script automatically selects `mariadb`/`mariadb-dump`/`mariadb-check` when available, otherwise falling back to `mysql`/`mysqldump`/`mysqlcheck`. Both client families read defaults such as `/root/.my.cnf`.
 
 ## Configuration
 Copy `mysqlbackup.cnf.example` to `/etc/mysqlbackup.cnf` and adjust the backup path, retention, notification address and optional maintenance settings.
 
 The public configuration contains no database credentials.
+
+`OPTIMIZE=0` is the default. Setting `OPTIMIZE=1` runs analyze and optimize against all databases. These operations can be expensive and may lock tables, so schedule them deliberately rather than as part of normal daily backups.
 
 ## Backups
 Each database is written as a compressed dump under the configured prefix:
@@ -35,9 +37,15 @@ Each database is written as a compressed dump under the configured prefix:
 
 System schemas such as `information_schema`, `performance_schema`, `mysql` and `sys` are skipped.
 
+Before replacing an existing same-day backup, the script checks that the schema contains at least one visible table or view, verifies the temporary gzip file with `gzip -t`, and (when `CHECK_CREATED=1`) enforces the configured `CHECK_SIZE` minimum. Invalid or undersized temporary dumps are removed; the previous backup is left untouched. Intentionally empty schemas are treated as failures to avoid silently creating unusable backups.
+
+These checks are not a substitute for periodic test restores. The backup account must have enough privileges to see and dump **all** intended tables, views, triggers, routines and events. `--single-transaction` gives a consistent snapshot for transactional (e.g. InnoDB) tables; it does not guarantee consistency of non-transactional tables.
+
+Newer MariaDB dumps may include a sandbox-mode header incompatible with older MariaDB or MySQL command-line restore clients. Use a compatible current MariaDB client for restores.
+
 ## Requirements
 - Bash
-- MySQL or MariaDB command-line client tools
+- MySQL or MariaDB command-line client tools (prefer native MariaDB client names when installed)
 - `gzip`
 - `flock`
 - standard GNU/Linux utilities
