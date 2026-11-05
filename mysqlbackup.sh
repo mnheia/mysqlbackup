@@ -49,7 +49,7 @@ touch "$LOG"
 exec >>"$LOG" 2>>"$ERROR_LOG"
 
 echo
-echo "===== $(date -Is) starting MySQL backup on ${HOST} ====="
+echo "===== $(date -Is) starting MySQL/MariaDB backup on ${HOST} ====="
 
 exec 200>"$LOCK"
 flock -n 200 || {
@@ -64,8 +64,30 @@ need_cmd() {
   }
 }
 
-need_cmd mysql
-need_cmd mysqldump
+# Use the native MariaDB tool names where available; retain MySQL aliases.
+if command -v mariadb >/dev/null 2>&1; then
+  DB_CLIENT=mariadb
+  if command -v mariadb-dump >/dev/null 2>&1; then
+    DUMP_CLIENT=mariadb-dump
+  else
+    DUMP_CLIENT=mysqldump
+  fi
+  if command -v mariadb-check >/dev/null 2>&1; then
+    CHECK_CLIENT=mariadb-check
+  else
+    CHECK_CLIENT=mysqlcheck
+  fi
+else
+  DB_CLIENT=mysql
+  DUMP_CLIENT=mysqldump
+  CHECK_CLIENT=mysqlcheck
+fi
+
+need_cmd "$DB_CLIENT"
+need_cmd "$DUMP_CLIENT"
+if [ "$OPTIMIZE" = "1" ]; then
+  need_cmd "$CHECK_CLIENT"
+fi
 need_cmd gzip
 need_cmd find
 need_cmd du
@@ -80,6 +102,7 @@ backup_database() {
   local db_dir="$PREFIX/$db"
   local out_file="$db_dir/$DATE.sql.gz"
   local tmp_file="$out_file.tmp"
+  local table_list checksize
 
   case "$db" in
     information_schema|performance_schema|mysql|sys)
@@ -93,11 +116,22 @@ backup_database() {
 
   mkdir -p "$db_dir"
 
-  echo "$(log_time): starting mysqldump for $db"
+  # Fail closed on inaccessible or empty schemas. This catches silently empty
+  # dumps caused by an underprivileged backup account or wrong database.
+  if ! table_list="$("$DB_CLIENT" -N -B --database="$db" -e 'SHOW FULL TABLES')"; then
+    echo "ERROR: failed to list tables in database: $db" >&2
+    return 1
+  fi
+  if [ -z "$table_list" ]; then
+    echo "ERROR: no visible tables/views in database: $db (check database and backup privileges)" >&2
+    return 1
+  fi
+
+  echo "$(log_time): starting $DUMP_CLIENT for $db"
 
   rm -f "$tmp_file"
 
-  if mysqldump \
+  if ! "$DUMP_CLIENT" \
       --single-transaction \
       --quick \
       --routines \
@@ -107,32 +141,35 @@ backup_database() {
       --default-character-set=utf8mb4 \
       --max-allowed-packet=1073741824 \
       "$db" | gzip -c > "$tmp_file"; then
-    mv -f "$tmp_file" "$out_file"
-  else
     rm -f "$tmp_file"
-    echo "ERROR: mysqldump failed for database: $db" >&2
+    echo "ERROR: database dump failed for database: $db" >&2
     return 1
   fi
 
-  echo "$(log_time): finished mysqldump for $db > $out_file"
-
-  local checksize
-  checksize="$(du -sb "$out_file" | awk '{ print $1 }')"
-
-  if [ "$CHECK_CREATED" = "1" ]; then
-    if [ "$checksize" -lt "$CHECK_SIZE" ]; then
-      echo "ERROR: backup is suspiciously small: $out_file size=${checksize}" >&2
-      return 1
-    fi
+  # Validate the temporary backup before replacing a previous good backup.
+  if ! gzip -t "$tmp_file"; then
+    rm -f "$tmp_file"
+    echo "ERROR: invalid gzip backup for database: $db" >&2
+    return 1
   fi
+
+  checksize="$(du -sb "$tmp_file" | awk '{ print $1 }')"
+  if [ "$CHECK_CREATED" = "1" ] && [ "$checksize" -lt "$CHECK_SIZE" ]; then
+    rm -f "$tmp_file"
+    echo "ERROR: backup is suspiciously small: $out_file size=$checksize" >&2
+    return 1
+  fi
+
+  mv -f "$tmp_file" "$out_file"
+  echo "$(log_time): finished database dump for $db > $out_file ($checksize bytes)"
 
   find "$db_dir" -type f -name '*.sql.gz' -mtime "$AGE" -delete
 }
 
-DATABASES="$(mysql -N -B -e "SHOW DATABASES")"
+DATABASES="$("$DB_CLIENT" -N -B -e "SHOW DATABASES")"
 
 if [ -z "$DATABASES" ]; then
-  echo "ERROR: mysql returned no databases" >&2
+  echo "ERROR: database client returned no databases" >&2
   exit 1
 fi
 
@@ -147,10 +184,16 @@ while IFS= read -r db; do
 done <<< "$DATABASES"
 
 if [ "$OPTIMIZE" = "1" ]; then
-  echo "$(log_time): starting mysqlcheck analyze/optimize"
-  mysqlcheck -a -A || true
-  mysqlcheck -o -A || true
-  echo "$(log_time): finished mysqlcheck analyze/optimize"
+  echo "$(log_time): starting $CHECK_CLIENT analyze/optimize"
+  if ! "$CHECK_CLIENT" -a -A; then
+    echo "ERROR: database analyze failed" >&2
+    backup_failed=1
+  fi
+  if ! "$CHECK_CLIENT" -o -A; then
+    echo "ERROR: database optimize failed" >&2
+    backup_failed=1
+  fi
+  echo "$(log_time): finished $CHECK_CLIENT analyze/optimize"
 fi
 
 # Filter known/accepted warnings.
@@ -178,5 +221,5 @@ fi
 
 rm -f "$ERROR_LOG" "$ERROR_LOG2"
 
-echo "MySQL backup completed successfully"
-echo "===== $(date -Is) finished MySQL backup ====="
+echo "MySQL/MariaDB backup completed successfully"
+echo "===== $(date -Is) finished MySQL/MariaDB backup ====="
